@@ -1,92 +1,94 @@
-// server.js
 const express = require('express');
 const axios = require('axios');
+const querystring = require('querystring');
 const cors = require('cors');
+require('dotenv').config();
+
 const app = express();
 app.use(cors());
+app.use(express.static('public'));
 
-const client_id = '0e1da93a99784520a2abdc19508f63e7';        // <-- Replace with your Spotify Client ID
-const client_secret = '86e8fd1129f84ba89e11ab3a3c57e7b4';// <-- Replace with your Spotify Client Secret
-const redirect_uri = 'http://127.0.0.1:5500/index.html';
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI;
 
-function generateRandomString(length) {
+const PORT = process.env.PORT || 3000;
+
+const generateRandomString = length => {
   let text = '';
   const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for(let i=0; i < length; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
+  for (let i = 0; i < length; i++) text += possible.charAt(Math.floor(Math.random() * possible.length));
   return text;
-}
+};
 
 const stateKey = 'spotify_auth_state';
 
 app.get('/login', (req, res) => {
   const state = generateRandomString(16);
-  const scope = 'user-read-private user-read-email streaming';
-  const authQueryParameters = new URLSearchParams({
+  const scope = 'user-read-private user-read-email playlist-read-private';
+  const authQuery = querystring.stringify({
     response_type: 'code',
-    client_id,
+    client_id: CLIENT_ID,
     scope,
-    redirect_uri,
-    state,
+    redirect_uri: REDIRECT_URI,
+    state
   });
-  res.redirect('https://accounts.spotify.com/authorize?' + authQueryParameters.toString());
+  res.cookie(stateKey, state);
+  res.redirect('https://accounts.spotify.com/authorize?' + authQuery);
 });
 
 app.get('/callback', async (req, res) => {
   const code = req.query.code || null;
-
-  if (!code) {
-    return res.status(400).send('Authorization code missing');
-  }
+  const state = req.query.state || null;
+  // Normally validate state here with cookie (omitted for simplicity)
 
   try {
-    const response = await axios({
+    const tokenResponse = await axios({
       method: 'post',
       url: 'https://accounts.spotify.com/api/token',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization:
-          'Basic ' + Buffer.from(client_id + ':' + client_secret).toString('base64'),
-      },
-      data: new URLSearchParams({
+      data: querystring.stringify({
         grant_type: 'authorization_code',
-        code,
-        redirect_uri,
-      }).toString(),
+        code: code,
+        redirect_uri: REDIRECT_URI
+      }),
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        Authorization: 'Basic ' + Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64')
+      }
     });
 
-    const { access_token, refresh_token, expires_in } = response.data;
+    const access_token = tokenResponse.data.access_token;
+    const refresh_token = tokenResponse.data.refresh_token;
 
-    // Redirect to frontend (adjust if frontend runs elsewhere)
-    res.redirect(`http://localhost:5500/?access_token=${access_token}&refresh_token=${refresh_token}&expires_in=${expires_in}`);
-  } catch (err) {
-    res.status(400).send(err.response?.data || err.message);
+    // Redirect to frontend with tokens in URL hash
+    res.redirect('/#' + querystring.stringify({ access_token, refresh_token }));
+  } catch (error) {
+    res.send('Error getting tokens');
   }
 });
 
+// Refresh token endpoint
 app.get('/refresh_token', async (req, res) => {
   const refresh_token = req.query.refresh_token;
   try {
-    const response = await axios({
+    const tokenResponse = await axios({
       method: 'post',
       url: 'https://accounts.spotify.com/api/token',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization:
-          'Basic ' + Buffer.from(client_id + ':' + client_secret).toString('base64'),
-      },
-      data: new URLSearchParams({
+      data: querystring.stringify({
         grant_type: 'refresh_token',
-        refresh_token,
-      }).toString(),
+        refresh_token
+      }),
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        Authorization: 'Basic ' + Buffer.from(CLIENT_ID + ':' + CLIENT_SECRET).toString('base64')
+      }
     });
-    res.json({ access_token: response.data.access_token });
-  } catch (err) {
-    res.status(400).send(err.response?.data || err.message);
+    res.send({ access_token: tokenResponse.data.access_token });
+  } catch (error) {
+    res.status(400).send('Error refreshing token');
   }
 });
 
-app.listen(3000, () => {
-  console.log('Backend server listening on http://localhost:3000');
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
